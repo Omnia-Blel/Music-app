@@ -2,10 +2,12 @@
   "name": "music-graphql-frontend",
   "version": "0.1.0",
   "private": true,
+  "type": "module",          
   "proxy": "http://localhost:4000",
   "dependencies": {
-    "@apollo/client": "^3.7.17",
-    "graphql": "^16.8.1",
+    "@apollo/client": "^3.14.1",
+    "graphql": "^16.13.2",
+    "graphql-ws": "^6.0.8",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1"

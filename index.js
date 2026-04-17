@@ -1,33 +1,41 @@
-const { PubSub, withFilter } = require('graphql-subscriptions');
-const bcrypt = require('bcryptjs');
+const express = require('express');
+const cors = require('cors');
+const http = require('http');
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
-const { Artist, Album, Track, Playlist, User, Review } = require('./src/models');
+const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
-const pubsub = new PubSub();
+const { ApolloServer } = require('@apollo/server');
+const { expressMiddleware } = require('@apollo/server/express4');
+const { ApolloServerPluginDrainHttpServer } = require('@apollo/server/plugin/drainHttpServer');
+const { makeExecutableSchema } = require('@graphql-tools/schema');
+const { WebSocketServer } = require('ws');
+const { useServer } = require('graphql-ws/use/ws');
+const { PubSub, withFilter } = require('graphql-subscriptions');
+
+const { Artist, Album, Track, Playlist, User, Genre, LikedTrack } = require('./src/models');
+const typeDefs = require('./schema');
 
 // ================================
-// ÉVÉNEMENTS SUBSCRIPTION
+// PUBSUB
 // ================================
+const pubsub = new PubSub();
+
 const EVENTS = {
-  TRACK_ADDED:           'TRACK_ADDED',
-  ALBUM_ADDED:           'ALBUM_ADDED',
-  ARTIST_UPDATED:        'ARTIST_UPDATED',
-  PLAYLIST_UPDATED:      'PLAYLIST_UPDATED',
-  REVIEW_ADDED:          'REVIEW_ADDED',
-  TRACK_PLAYS_UPDATED:   'TRACK_PLAYS_UPDATED',
+  TRACK_ADDED:        'TRACK_ADDED',
+  TRACK_DELETED:      'TRACK_DELETED',
+  TRACK_LIKED:        'TRACK_LIKED',
+  TRACK_UNLIKED:      'TRACK_UNLIKED',
+  ALBUM_ADDED:        'ALBUM_ADDED',
+  ARTIST_UPDATED:     'ARTIST_UPDATED',
+  PLAYLIST_UPDATED:   'PLAYLIST_UPDATED',
+  TRACK_RANK_UPDATED: 'TRACK_RANK_UPDATED',
 };
 
 // ================================
 // HELPERS
 // ================================
-const formatDuration = (seconds) => {
-  if (!seconds) return null;
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
-};
-
 const getPagination = (page = 1, limit = 10) => {
   const skip = (page - 1) * limit;
   return { skip, limit: Math.min(limit, 100) };
@@ -36,9 +44,9 @@ const getPagination = (page = 1, limit = 10) => {
 const getPageInfo = (total, page, limit) => {
   const totalPages = Math.ceil(total / limit);
   return {
-    hasNextPage: page < totalPages,
+    hasNextPage:     page < totalPages,
     hasPreviousPage: page > 1,
-    currentPage: page,
+    currentPage:     page,
     totalPages,
   };
 };
@@ -60,8 +68,8 @@ const requireAdmin = (context) => {
 };
 
 const buildSort = (sort, fieldMap) => {
-  if (!sort) return { createdAt: -1 };
-  const field = fieldMap[sort.field] || 'createdAt';
+  if (!sort) return { _id: -1 };
+  const field = fieldMap[sort.field] || '_id';
   return { [field]: sort.order === 'DESC' ? -1 : 1 };
 };
 
@@ -70,83 +78,39 @@ const buildSort = (sort, fieldMap) => {
 // ================================
 const resolvers = {
 
-  // ---- CHAMPS CALCULÉS ----
+  LikedTrack: {
+    id:    (parent) => parent._id.toString(),
+    user:  async (parent) => User.findById(parent.user).exec(),
+    track: async (parent) => {
+      if (parent.track && parent.track._id) return parent.track;
+      return Track.findById(parent.track).exec();
+    },
+  },
+
   Artist: {
-    albums: async (parent) => {
-      return await Album.find({ artistId: parent._id }).exec();
-    },
-    totalAlbums: async (parent) => {
-      return await Album.countDocuments({ artistId: parent._id }).exec();
-    },
-    id: (parent) => parent._id.toString(),
-    createdAt: (parent) => parent.createdAt.toISOString(),
-    updatedAt: (parent) => parent.updatedAt.toISOString(),
+    id:     (parent) => parent._id.toString(),
+    albums: async (parent) => Album.find({ artist: parent._id }).exec(),
   },
 
   Album: {
-    artist: async (parent) => {
-      return await Artist.findById(parent.artistId).exec();
-    },
-    tracks: async (parent) => {
-      return await Track.find({ albumId: parent._id }).sort({ trackNumber: 1 }).exec();
-    },
-    reviews: async (parent) => {
-      return await Review.find({ albumId: parent._id }).exec();
-    },
-    averageRating: async (parent) => {
-      const reviews = await Review.find({ albumId: parent._id }).exec();
-      if (!reviews.length) return null;
-      const sum = reviews.reduce((acc, r) => acc + r.rating, 0);
-      return Math.round((sum / reviews.length) * 10) / 10;
-    },
-    id: (parent) => parent._id.toString(),
-    createdAt: (parent) => parent.createdAt.toISOString(),
-    updatedAt: (parent) => parent.updatedAt.toISOString(),
+    id:     (parent) => parent._id.toString(),
+    artist: async (parent) => Artist.findById(parent.artist).exec(),
+    tracks: async (parent) => Track.find({ album: parent._id }).sort({ position: 1 }).exec(),
   },
 
   Track: {
-    album: async (parent) => {
-      return await Album.findById(parent.albumId).exec();
-    },
-    artist: async (parent) => {
-      return await Artist.findById(parent.artistId).exec();
-    },
-    durationFormatted: (parent) => formatDuration(parent.duration),
-    id: (parent) => parent._id.toString(),
-    createdAt: (parent) => parent.createdAt.toISOString(),
-    updatedAt: (parent) => parent.updatedAt.toISOString(),
+    id:     (parent) => parent._id.toString(),
+    album:  async (parent) => Album.findById(parent.album).exec(),
+    artist: async (parent) => Artist.findById(parent.artist).exec(),
   },
 
   Playlist: {
-    user: async (parent) => {
-      return await User.findById(parent.userId).exec();
-    },
-    tracks: async (parent) => {
-      return await Track.find({ _id: { $in: parent.tracks } }).exec();
-    },
-    totalTracks: (parent) => parent.tracks.length,
-    id: (parent) => parent._id.toString(),
-    createdAt: (parent) => parent.createdAt.toISOString(),
-    updatedAt: (parent) => parent.updatedAt.toISOString(),
+    id:     (parent) => parent._id.toString(),
+    tracks: async (parent) => Track.find({ _id: { $in: parent.tracks } }).exec(),
   },
 
   User: {
-    playlists: async (parent) => {
-      return await Playlist.find({ userId: parent._id }).exec();
-    },
     id: (parent) => parent._id.toString(),
-    createdAt: (parent) => parent.createdAt.toISOString(),
-  },
-
-  Review: {
-    user: async (parent) => {
-      return await User.findById(parent.userId).exec();
-    },
-    album: async (parent) => {
-      return await Album.findById(parent.albumId).exec();
-    },
-    id: (parent) => parent._id.toString(),
-    createdAt: (parent) => parent.createdAt.toISOString(),
   },
 
   // ================================
@@ -154,133 +118,109 @@ const resolvers = {
   // ================================
   Query: {
 
-    // --- Artistes avec pagination, filtre et tri ---
     artists: async (_, { filter = {}, sort, page = 1, limit = 10 }) => {
       const query = {};
-      if (filter.country)    query.country = new RegExp(filter.country, 'i');
-      if (filter.genre)      query.genres  = filter.genre;
-      if (filter.searchName) query.name    = new RegExp(filter.searchName, 'i');
-
-      const sortMap = { NAME: 'name', CREATED_AT: 'createdAt' };
+      if (filter.searchName) query.name = new RegExp(filter.searchName, 'i');
+      const sortMap = { NAME: 'name', NB_FAN: 'nb_fan', NB_ALBUM: 'nb_album' };
       const sortObj = buildSort(sort, sortMap);
       const { skip } = getPagination(page, limit);
-
       const [nodes, totalCount] = await Promise.all([
         Artist.find(query).sort(sortObj).skip(skip).limit(limit).exec(),
         Artist.countDocuments(query).exec(),
       ]);
-
       return { nodes, totalCount, pageInfo: getPageInfo(totalCount, page, limit) };
     },
 
-    artist: async (_, { id }) => {
-      return await Artist.findById(id).exec();
-    },
+    artist: async (_, { id }) => Artist.findById(id).exec(),
 
-    // --- Albums avec pagination, filtre et tri ---
     albums: async (_, { filter = {}, sort, page = 1, limit = 10 }) => {
       const query = {};
-      if (filter.genre)    query.genre    = new RegExp(filter.genre, 'i');
-      if (filter.artistId) query.artistId = filter.artistId;
+      if (filter.genre_id)   query.genre_id = filter.genre_id;
+      if (filter.artistId)   query.artist   = filter.artistId;
+      if (filter.explicit_lyrics !== undefined) query.explicit_lyrics = filter.explicit_lyrics;
       if (filter.yearFrom || filter.yearTo) {
-        query.releaseDate = {};
-        if (filter.yearFrom) query.releaseDate.$gte = new Date(`${filter.yearFrom}-01-01`);
-        if (filter.yearTo)   query.releaseDate.$lte = new Date(`${filter.yearTo}-12-31`);
+        query.release_date = {};
+        if (filter.yearFrom) query.release_date.$gte = new Date(`${filter.yearFrom}-01-01`);
+        if (filter.yearTo)   query.release_date.$lte = new Date(`${filter.yearTo}-12-31`);
       }
-
-      const sortMap = { TITLE: 'title', RELEASE_DATE: 'releaseDate' };
+      const sortMap = { TITLE: 'title', RELEASE_DATE: 'release_date', FANS: 'fans', DURATION: 'duration' };
       const sortObj = buildSort(sort, sortMap);
       const { skip } = getPagination(page, limit);
-
       const [nodes, totalCount] = await Promise.all([
         Album.find(query).sort(sortObj).skip(skip).limit(limit).exec(),
         Album.countDocuments(query).exec(),
       ]);
-
       return { nodes, totalCount, pageInfo: getPageInfo(totalCount, page, limit) };
     },
 
-    album: async (_, { id }) => {
-      return await Album.findById(id).exec();
-    },
+    album: async (_, { id }) => Album.findById(id).exec(),
 
-    // --- Tracks avec pagination, filtre et tri ---
     tracks: async (_, { filter = {}, sort, page = 1, limit = 20 }) => {
       const query = {};
-      if (filter.albumId)    query.albumId    = filter.albumId;
-      if (filter.artistId)   query.artistId   = filter.artistId;
-      if (filter.isExplicit !== undefined) query.isExplicit = filter.isExplicit;
-      if (filter.minPlays)   query.plays      = { $gte: filter.minPlays };
-
-      const sortMap = { TITLE: 'title', PLAYS: 'plays', DURATION: 'duration', TRACK_NUMBER: 'trackNumber' };
+      if (filter.albumId)  query.album  = filter.albumId;
+      if (filter.artistId) query.artist = filter.artistId;
+      if (filter.explicit_lyrics !== undefined) query.explicit_lyrics = filter.explicit_lyrics;
+      if (filter.minRank !== undefined) query.rank = { $gte: filter.minRank };
+      const sortMap = { TITLE: 'title', RANK: 'rank', DURATION: 'duration', POSITION: 'position' };
       const sortObj = buildSort(sort, sortMap);
       const { skip } = getPagination(page, limit);
-
       const [nodes, totalCount] = await Promise.all([
         Track.find(query).sort(sortObj).skip(skip).limit(limit).exec(),
         Track.countDocuments(query).exec(),
       ]);
-
       return { nodes, totalCount, pageInfo: getPageInfo(totalCount, page, limit) };
     },
 
-    track: async (_, { id }) => {
-      return await Track.findById(id).exec();
+    track: async (_, { id }) => Track.findById(id).exec(),
+
+    topTracks:  async (_, { limit = 10 }) => Track.find().sort({ rank: -1 }).limit(limit).exec(),
+    topArtists: async (_, { limit = 10 }) => Artist.find().sort({ nb_fan: -1 }).limit(limit).exec(),
+
+    playlists: async (_, __, context) => {
+      let decoded = null;
+      try { decoded = verifyToken(context); } catch {}
+      if (decoded) {
+        return Playlist.find({
+          $or: [
+            { userId: decoded.userId },
+            { userId: { $exists: false } },
+            { userId: null },
+          ],
+        }).exec();
+      }
+      return Playlist.find({ $or: [{ userId: { $exists: false } }, { userId: null }] }).exec();
     },
 
-    // --- Top Tracks / Artistes ---
-    topTracks: async (_, { limit = 10 }) => {
-      return await Track.find().sort({ plays: -1 }).limit(limit).exec();
-    },
-    topArtists: async (_, { limit = 10 }) => {
-      const results = await Track.aggregate([
-        { $group: { _id: '$artistId', totalPlays: { $sum: '$plays' } } },
-        { $sort: { totalPlays: -1 } },
-        { $limit: limit },
-      ]);
-      return await Artist.find({ _id: { $in: results.map((r) => r._id) } }).exec();
+    playlist: async (_, { id }) => Playlist.findById(id).exec(),
+
+    genres: async () => Genre.find().exec(),
+    genre:  async (_, { id }) => Genre.findById(id).exec(),
+
+    likedTracks: async (_, __, context) => {
+      const decoded = verifyToken(context);
+      const liked = await LikedTrack.find({ user: decoded.userId }).populate('track').exec();
+      return liked;
     },
 
-    // --- Playlists ---
-    playlists: async (_, { userId, isPublic }) => {
-      const query = {};
-      if (userId)   query.userId   = userId;
-      if (isPublic !== undefined) query.isPublic = isPublic;
-      return await Playlist.find(query).exec();
-    },
-    playlist: async (_, { id }) => {
-      return await Playlist.findById(id).exec();
-    },
-
-    // --- Reviews ---
-    reviews: async (_, { page = 1, limit = 10 }) => {
+    artistTracks: async (_, { artistId, page = 1, limit = 20 }) => {
       const { skip } = getPagination(page, limit);
-      const [nodes, totalCount] = await Promise.all([
-        Review.find().sort({ createdAt: -1 }).skip(skip).limit(limit).exec(),
-        Review.countDocuments().exec(),
+      const [tracks, totalCount] = await Promise.all([
+        Track.find({ artist: artistId }).skip(skip).limit(limit).exec(),
+        Track.countDocuments({ artist: artistId }).exec(),
       ]);
-      return { nodes, totalCount, hasMore: (page * limit) < totalCount, total: totalCount };
+      return { nodes: tracks, totalCount, pageInfo: getPageInfo(totalCount, page, limit) };
     },
 
-    albumReviews: async (_, { albumId }) => {
-      return await Review.find({ albumId }).sort({ createdAt: -1 }).exec();
-    },
-
-    userReviews: async (_, { userId }) => {
-      return await Review.find({ userId }).sort({ createdAt: -1 }).exec();
-    },
-
-    // --- Utilisateurs ---
     me: async (_, __, context) => {
       const decoded = verifyToken(context);
-      return await User.findById(decoded.userId).exec();
-    },
-    users: async (_, __, context) => {
-      requireAdmin(context);
-      return await User.find().exec();
+      return User.findById(decoded.userId).exec();
     },
 
-    // --- Recherche globale ---
+    users: async (_, __, context) => {
+      requireAdmin(context);
+      return User.find().exec();
+    },
+
     search: async (_, { query, limit = 5 }) => {
       const regex = new RegExp(query, 'i');
       const [artists, albums, tracks] = await Promise.all([
@@ -297,41 +237,44 @@ const resolvers = {
   // ================================
   Mutation: {
 
-    // --- Auth ---
     register: async (_, { input }) => {
       const existing = await User.findOne({ email: input.email }).exec();
       if (existing) throw new Error('Un compte avec cet email existe déjà.');
-
       const hashedPwd = await bcrypt.hash(input.password, 12);
-      const user = await User.create({ ...input, password: hashedPwd });
-      const token = jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
+      const user = await User.create({ ...input, password: hashedPwd, role: 'user' });
+      const token = jwt.sign(
+        { userId: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRES_IN }
+      );
       return { token, user };
     },
 
     login: async (_, { input }) => {
       const user = await User.findOne({ email: input.email }).exec();
       if (!user) throw new Error('Email ou mot de passe incorrect.');
-
       const isValid = await bcrypt.compare(input.password, user.password);
       if (!isValid) throw new Error('Email ou mot de passe incorrect.');
-
-      const token = jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
+      const token = jwt.sign(
+        { userId: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRES_IN }
+      );
       return { token, user };
     },
 
-    // --- Artistes ---
     createArtist: async (_, { input }, context) => {
       requireAdmin(context);
       const artist = await Artist.create(input);
-      pubsub.publish(EVENTS.ARTIST_UPDATED, { artistUpdated: artist });
+      await pubsub.publish(EVENTS.ARTIST_UPDATED, { artistUpdated: artist });
       return artist;
     },
 
     updateArtist: async (_, { id, input }, context) => {
       requireAdmin(context);
-      const artist = await Artist.findByIdAndUpdate(id, { ...input, updatedAt: new Date() }, { new: true }).exec();
+      const artist = await Artist.findByIdAndUpdate(id, input, { new: true }).exec();
       if (!artist) throw new Error('Artiste introuvable.');
-      pubsub.publish(EVENTS.ARTIST_UPDATED, { artistUpdated: artist });
+      await pubsub.publish(EVENTS.ARTIST_UPDATED, { artistUpdated: artist });
       return artist;
     },
 
@@ -342,17 +285,17 @@ const resolvers = {
       return { success: true, message: `Artiste "${artist.name}" supprimé avec succès.` };
     },
 
-    // --- Albums ---
     createAlbum: async (_, { input }, context) => {
       requireAdmin(context);
-      const album = await Album.create(input);
-      pubsub.publish(EVENTS.ALBUM_ADDED, { albumAdded: album });
+      const { artistId, ...rest } = input;
+      const album = await Album.create({ ...rest, artist: artistId });
+      await pubsub.publish(EVENTS.ALBUM_ADDED, { albumAdded: album });
       return album;
     },
 
     updateAlbum: async (_, { id, input }, context) => {
       requireAdmin(context);
-      const album = await Album.findByIdAndUpdate(id, { ...input, updatedAt: new Date() }, { new: true }).exec();
+      const album = await Album.findByIdAndUpdate(id, input, { new: true }).exec();
       if (!album) throw new Error('Album introuvable.');
       return album;
     },
@@ -361,49 +304,73 @@ const resolvers = {
       requireAdmin(context);
       const album = await Album.findByIdAndDelete(id).exec();
       if (!album) throw new Error('Album introuvable.');
-      await Track.deleteMany({ albumId: id }).exec();
+      await Track.deleteMany({ album: id }).exec();
       return { success: true, message: `Album "${album.title}" et ses pistes supprimés.` };
     },
 
-    // --- Tracks ---
+    // ✅ CORRIGÉ : newTrack → track + publish après création
     createTrack: async (_, { input }, context) => {
       requireAdmin(context);
-      const track = await Track.create(input);
-      await Album.findByIdAndUpdate(input.albumId, { $inc: { totalTracks: 1 } }).exec();
-      pubsub.publish(EVENTS.TRACK_ADDED, { trackAdded: track });
-      return track;
+      const { albumId, artistId, ...rest } = input;
+      const track = await Track.create({ ...rest, album: albumId, artist: artistId });
+
+      // Populer album et artist pour que la subscription reçoive un objet complet
+      const populatedTrack = await Track.findById(track._id)
+        .populate('album')
+        .populate('artist')
+        .exec();
+
+      await pubsub.publish(EVENTS.TRACK_ADDED, { trackAdded: populatedTrack });
+      return populatedTrack;
     },
 
     updateTrack: async (_, { id, input }, context) => {
       requireAdmin(context);
-      const track = await Track.findByIdAndUpdate(id, { ...input, updatedAt: new Date() }, { new: true }).exec();
+      const track = await Track.findByIdAndUpdate(id, input, { new: true }).exec();
       if (!track) throw new Error('Piste introuvable.');
       return track;
     },
 
+    // ✅ CORRIGÉ : publish une seule fois, après la vérification d'existence
     deleteTrack: async (_, { id }, context) => {
       requireAdmin(context);
       const track = await Track.findByIdAndDelete(id).exec();
       if (!track) throw new Error('Piste introuvable.');
-      await Album.findByIdAndUpdate(track.albumId, { $inc: { totalTracks: -1 } }).exec();
+      await pubsub.publish(EVENTS.TRACK_DELETED, { trackDeleted: { id } });
       return { success: true, message: `Piste "${track.title}" supprimée.` };
     },
 
-    // --- Playlists ---
-    createPlaylist: async (_, { input }, context) => {
-      const user = verifyToken(context);
-      const playlist = await Playlist.create({ ...input, userId: user.userId });
-      return playlist;
+    // ✅ CORRIGÉ : publish avant le return + retourner l'objet LikedTrack complet
+    likeTrack: async (_, { trackId }, context) => {
+      const decoded = verifyToken(context);
+      const existing = await LikedTrack.findOne({ user: decoded.userId, track: trackId }).exec();
+      if (existing) throw new Error('Piste déjà likée.');
+      const liked = await LikedTrack.create({ user: decoded.userId, track: trackId });
+      await pubsub.publish(EVENTS.TRACK_LIKED, { trackLiked: { trackId } });
+      return liked;
+    },
+
+    unlikeTrack: async (_, { trackId }, context) => {
+      const decoded = verifyToken(context);
+      const liked = await LikedTrack.findOneAndDelete({ user: decoded.userId, track: trackId }).exec();
+      if (!liked) throw new Error('Like introuvable.');
+      await pubsub.publish(EVENTS.TRACK_UNLIKED, { trackUnliked: { trackId } });
+      return { success: true, message: 'Piste retirée des favoris.' };
+    },
+
+    createPlaylist: async (_, { input, userId }) => {
+      if (!userId) throw new Error('userId est obligatoire');
+      return Playlist.create({ ...input, userId });
     },
 
     updatePlaylist: async (_, { id, input }, context) => {
       const user = verifyToken(context);
       const playlist = await Playlist.findById(id).exec();
       if (!playlist) throw new Error('Playlist introuvable.');
-      if (playlist.userId.toString() !== user.userId && user.role !== 'admin')
+      if (playlist.userId?.toString() !== user.userId && user.role !== 'admin')
         throw new Error('Accès refusé.');
-      const updated = await Playlist.findByIdAndUpdate(id, { ...input, updatedAt: new Date() }, { new: true }).exec();
-      pubsub.publish(EVENTS.PLAYLIST_UPDATED, { playlistUpdated: updated });
+      const updated = await Playlist.findByIdAndUpdate(id, input, { new: true }).exec();
+      await pubsub.publish(EVENTS.PLAYLIST_UPDATED, { playlistUpdated: updated });
       return updated;
     },
 
@@ -411,14 +378,13 @@ const resolvers = {
       const user = verifyToken(context);
       const playlist = await Playlist.findById(playlistId).exec();
       if (!playlist) throw new Error('Playlist introuvable.');
-      if (playlist.userId.toString() !== user.userId && user.role !== 'admin')
+      if (playlist.userId?.toString() !== user.userId && user.role !== 'admin')
         throw new Error('Accès refusé.');
-      if (!playlist.tracks.includes(trackId)) {
+      if (!playlist.tracks.map((t) => t.toString()).includes(trackId)) {
         playlist.tracks.push(trackId);
-        playlist.updatedAt = new Date();
         await playlist.save();
       }
-      pubsub.publish(EVENTS.PLAYLIST_UPDATED, { playlistUpdated: playlist });
+      await pubsub.publish(EVENTS.PLAYLIST_UPDATED, { playlistUpdated: playlist });
       return playlist;
     },
 
@@ -426,12 +392,11 @@ const resolvers = {
       const user = verifyToken(context);
       const playlist = await Playlist.findById(playlistId).exec();
       if (!playlist) throw new Error('Playlist introuvable.');
-      if (playlist.userId.toString() !== user.userId && user.role !== 'admin')
+      if (playlist.userId?.toString() !== user.userId && user.role !== 'admin')
         throw new Error('Accès refusé.');
       playlist.tracks = playlist.tracks.filter((id) => id.toString() !== trackId);
-      playlist.updatedAt = new Date();
       await playlist.save();
-      pubsub.publish(EVENTS.PLAYLIST_UPDATED, { playlistUpdated: playlist });
+      await pubsub.publish(EVENTS.PLAYLIST_UPDATED, { playlistUpdated: playlist });
       return playlist;
     },
 
@@ -439,140 +404,138 @@ const resolvers = {
       const user = verifyToken(context);
       const playlist = await Playlist.findById(id).exec();
       if (!playlist) throw new Error('Playlist introuvable.');
-      if (playlist.userId.toString() !== user.userId && user.role !== 'admin')
+      if (playlist.userId?.toString() !== user.userId && user.role !== 'admin')
         throw new Error('Accès refusé.');
       await Playlist.findByIdAndDelete(id).exec();
-      return { success: true, message: `Playlist "${playlist.name}" supprimée.` };
-    },
-
-    // --- Reviews ---
-    createReview: async (_, { input }, context) => {
-      const user = verifyToken(context);
-      const existing = await Review.findOne({ userId: user.userId, albumId: input.albumId }).exec();
-      if (existing) throw new Error('Vous avez déjà donné un avis pour cet album.');
-      const review = await Review.create({ ...input, userId: user.userId });
-      pubsub.publish(EVENTS.REVIEW_ADDED, { reviewAdded: review, albumId: input.albumId });
-      return review;
-    },
-
-    updateReview: async (_, { id, input }, context) => {
-      const user = verifyToken(context);
-      const review = await Review.findById(id).exec();
-      if (!review) throw new Error('Avis introuvable.');
-      if (review.userId.toString() !== user.userId) throw new Error('Accès refusé.');
-      return await Review.findByIdAndUpdate(id, { ...input, updatedAt: new Date() }, { new: true }).exec();
-    },
-
-    deleteReview: async (_, { id }, context) => {
-      const user = verifyToken(context);
-      const review = await Review.findById(id).exec();
-      if (!review) throw new Error('Avis introuvable.');
-      if (review.userId.toString() !== user.userId && user.role !== 'admin')
-        throw new Error('Accès refusé.');
-      await Review.findByIdAndDelete(id).exec();
-      return { success: true, message: 'Avis supprimé.' };
-    },
-
-    // --- Plays ---
-    incrementPlays: async (_, { trackId }) => {
-      const track = await Track.findByIdAndUpdate(trackId, { $inc: { plays: 1 } }, { new: true }).exec();
-      if (!track) throw new Error('Piste introuvable.');
-      pubsub.publish(EVENTS.TRACK_PLAYS_UPDATED, { trackPlaysUpdated: track, trackId });
-      return track;
+      return { success: true, message: `Playlist "${playlist.title}" supprimée.` };
     },
   },
 
   // ================================
   // SUBSCRIPTIONS
   // ================================
-  Subscription: {
+// ================================
+// SUBSCRIPTIONS (VERSION FINALE ROBUSTE)
+// ================================
+Subscription: {
 
-    trackAdded: {
-      subscribe: () => pubsub.asyncIterableIterator([EVENTS.TRACK_ADDED]),
-    },
-
-    albumAdded: {
-      subscribe: withFilter(
-        () => pubsub.asyncIterableIterator([EVENTS.ALBUM_ADDED]),
-        (payload, variables) => {
-          if (!variables.artistId) return true;
-          return payload.albumAdded.artistId.toString() === variables.artistId;
-        }
-      ),
-    },
-
-    artistUpdated: {
-      subscribe: () => pubsub.asyncIterableIterator([EVENTS.ARTIST_UPDATED]),
-    },
-
-    playlistUpdated: {
-      subscribe: withFilter(
-        () => pubsub.asyncIterableIterator([EVENTS.PLAYLIST_UPDATED]),
-        (payload, variables) =>
-          payload.playlistUpdated._id.toString() === variables.playlistId
-      ),
-    },
-
-    reviewAdded: {
-      subscribe: withFilter(
-        () => pubsub.asyncIterableIterator([EVENTS.REVIEW_ADDED]),
-        (payload, variables) => payload.albumId === variables.albumId
-      ),
-    },
-
-    trackPlaysUpdated: {
-      subscribe: withFilter(
-        () => pubsub.asyncIterableIterator([EVENTS.TRACK_PLAYS_UPDATED]),
-        (payload, variables) => payload.trackId === variables.trackId
-      ),
-    },
+  trackAdded: {
+    subscribe: () => pubsub.asyncIterator([EVENTS.TRACK_ADDED]),
+    resolve: (payload) => payload?.trackAdded || payload,
   },
+
+  trackDeleted: {
+    subscribe: () => pubsub.asyncIterator([EVENTS.TRACK_DELETED]),
+    resolve: (payload) => payload?.trackDeleted || payload,
+  },
+
+  trackLiked: {
+    subscribe: () => pubsub.asyncIterator([EVENTS.TRACK_LIKED]),
+    resolve: (payload) => payload?.trackLiked || payload,
+  },
+
+  trackUnliked: {
+    subscribe: () => pubsub.asyncIterator([EVENTS.TRACK_UNLIKED]),
+    resolve: (payload) => payload?.trackUnliked || payload,
+  },
+
+  albumAdded: {
+    subscribe: withFilter(
+      () => pubsub.asyncIterator([EVENTS.ALBUM_ADDED]),
+      (payload, variables) => {
+        if (!variables?.artistId) return true;
+        return payload?.albumAdded?.artist?.toString() === variables.artistId;
+      }
+    ),
+    resolve: (payload) => payload?.albumAdded || payload,
+  },
+
+  artistUpdated: {
+    subscribe: () => pubsub.asyncIterator([EVENTS.ARTIST_UPDATED]),
+    resolve: (payload) => payload?.artistUpdated || payload,
+  },
+
+  playlistUpdated: {
+    subscribe: withFilter(
+      () => pubsub.asyncIterator([EVENTS.PLAYLIST_UPDATED]),
+      (payload, variables) =>
+        payload?.playlistUpdated?._id?.toString() === variables?.playlistId
+    ),
+    resolve: (payload) => payload?.playlistUpdated || payload,
+  },
+
+  trackRankUpdated: {
+    subscribe: withFilter(
+      () => pubsub.asyncIterator([EVENTS.TRACK_RANK_UPDATED]),
+      (payload, variables) => payload?.trackId === variables?.trackId
+    ),
+    resolve: (payload) => payload?.trackRankUpdated || payload,
+  },
+},
+
 };
 
 // ================================
-// SERVER SETUP
+// DÉMARRAGE DU SERVEUR
 // ================================
-const express = require('express');
-const cors = require('cors');
-const mongoose = require('mongoose');
-const http = require('http');
-const { ApolloServer } = require('apollo-server-express');
-const typeDefs = require('./schema');
-const authMiddleware = require('./auth');
-
-const PORT = process.env.PORT || 4000;
+const PORT     = process.env.PORT       || 4000;
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/music_graphql';
 
 async function startServer() {
-  const app = express();
-
-  // CORS Configuration - CRITICAL for credentials
-  const corsOptions = {
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
-    credentials: true,
-    methods: ['GET', 'POST', 'OPTIONS', 'HEAD', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Client-ID', 'X-Client-Secret'],
-    optionsSuccessStatus: 200,
-  };
-
-  // Apply CORS globally BEFORE any other middleware
-  app.use(cors(corsOptions));
-  app.use(express.json());
-
-  // MongoDB Connection
+  // 1. Connexion MongoDB
   try {
     await mongoose.connect(MONGO_URI);
     console.log('✅ MongoDB connecté');
   } catch (err) {
-    console.error('❌ Erreur de connexion MongoDB:', err);
+    console.error('❌ Erreur MongoDB:', err);
     process.exit(1);
   }
 
-  // Apollo Server
+  // 2. App Express + serveur HTTP
+  const app        = express();
+  const httpServer = http.createServer(app);
+
+  // 3. Schéma exécutable
+  const schema = makeExecutableSchema({ typeDefs, resolvers });
+
+  // 4. WebSocket server pour les subscriptions
+  const wsServer = new WebSocketServer({ server: httpServer, path: '/graphql' });
+
+  const serverCleanup = useServer(
+    {
+      schema,
+      connectionInitWaitTimeout: 10000,
+      context: async (ctx) => {
+        const token = ctx.connectionParams?.authorization?.replace('Bearer ', '') || null;
+        return { token };
+      },
+      onConnect: async (ctx) => {
+        console.log('✅ WS client connecté, params:', ctx.connectionParams);
+        return true; // ← IMPORTANT : doit retourner true pour accepter la connexion
+      },
+  
+      onDisconnect: (ctx, code, reason) => {
+        console.log('🔴 WS client déconnecté:', code, reason);
+      },
+    },
+    wsServer
+  );
+
+  // 5. Apollo Server
   const server = new ApolloServer({
-    typeDefs,
-    resolvers,
-    context: authMiddleware,
+    schema,
+    plugins: [
+      ApolloServerPluginDrainHttpServer({ httpServer }),
+      {
+        async serverWillStart() {
+          return {
+            async drainServer() {
+              await serverCleanup.dispose();
+            },
+          };
+        },
+      },
+    ],
     formatError: (error) => {
       console.error('GraphQL Error:', error);
       return error;
@@ -581,30 +544,33 @@ async function startServer() {
 
   await server.start();
 
-  // Apply Apollo middleware with proper Express integration
-  server.applyMiddleware({ 
-    app, 
-    path: '/graphql',
-    cors: false, // We already applied CORS globally
-  });
+  // 6. Middleware Express
+  app.use(
+    '/graphql',
+    cors({
+      origin:      process.env.CLIENT_URL || 'http://localhost:3000',
+      credentials: true,
+    }),
+    express.json(),
+    expressMiddleware(server, {
+      context: async ({ req }) => ({
+        token: req.headers.authorization?.replace('Bearer ', '') || null,
+      }),
+    })
+  );
 
-  // Health Check endpoint
-  app.get('/health', (req, res) => {
-    res.json({ status: 'OK', timestamp: new Date().toISOString() });
-  });
+  app.get('/health', (_, res) =>
+    res.json({ status: 'OK', timestamp: new Date().toISOString() })
+  );
 
-  // Start HTTP Server
-  const httpServer = http.createServer(app);
+  // 7. Écoute
+  await new Promise((resolve) => httpServer.listen(PORT, resolve));
 
-  await new Promise((resolve) => {
-    httpServer.listen(PORT, resolve);
-  });
+  console.log(`\n🎵 Serveur GraphQL  → http://localhost:${PORT}/graphql`);
+  console.log(`🔌 WebSocket        → ws://localhost:${PORT}/graphql`);
+  console.log(`❤️  Health check    → http://localhost:${PORT}/health\n`);
 
-  console.log(`\n🎵 Serveur GraphQL lancé sur http://localhost:${PORT}/graphql`);
-  console.log(`📊 Playground disponible sur http://localhost:${PORT}${server.graphqlPath}`);
-  console.log(`❤️  Health check: http://localhost:${PORT}/health\n`);
-
-  // Graceful shutdown
+  // 8. Arrêt propre
   process.on('SIGINT', async () => {
     console.log('\n🛑 Arrêt du serveur...');
     await server.stop();
@@ -620,5 +586,3 @@ startServer().catch((err) => {
   console.error('❌ Erreur au démarrage:', err);
   process.exit(1);
 });
-
-module.exports = resolvers;

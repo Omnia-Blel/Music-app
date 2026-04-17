@@ -9,68 +9,107 @@ const typeDefs = gql`
   type Artist {
     id: ID!
     name: String!
-    bio: String
-    country: String
-    birthDate: String
-    genres: [String!]
-    imageUrl: String
-    socialLinks: SocialLinks
+    link: String
+    share: String
+    picture: String
+    picture_small: String
+    picture_medium: String
+    picture_big: String
+    picture_xl: String
+    nb_album: Int
+    nb_fan: Int
+    radio: Boolean
+    tracklist: String
     albums: [Album!]
-    totalAlbums: Int
-    createdAt: String!
-    updatedAt: String!
-  }
-
-  type SocialLinks {
-    spotify: String
-    instagram: String
-    youtube: String
+    createdAt: String
+    updatedAt: String
   }
 
   type Album {
     id: ID!
     title: String!
-    artist: Artist!
-    releaseDate: String
-    genre: String
+    upc: String
+    link: String
+    share: String
+    cover: String
+    cover_small: String
+    cover_medium: String
+    cover_big: String
+    cover_xl: String
+    genre_id: Int
     label: String
-    coverUrl: String
-    description: String
-    totalTracks: Int
+    provider: String
+    nb_tracks: Int
+    duration: Int
+    fans: Int
+    release_date: String
+    record_type: String
+    available: Boolean
+    tracklist: String
+    explicit_lyrics: Boolean
+    explicit_content_lyrics: Int
+    explicit_content_cover: Int
+    artist: Artist
     tracks: [Track!]
-    reviews: [Review!]
-    averageRating: Float
-    createdAt: String!
-    updatedAt: String!
+    createdAt: String
+    updatedAt: String
   }
 
   type Track {
     id: ID!
+    readable: Boolean
     title: String!
-    album: Album!
-    artist: Artist!
+    title_short: String
+    title_version: String
+    isrc: String
+    link: String
+    share: String
     duration: Int
-    durationFormatted: String
-    trackNumber: Int
-    lyrics: String
-    audioUrl: String
-    plays: Int
-    isExplicit: Boolean
-    createdAt: String!
-    updatedAt: String!
+    track_position: Int
+    disk_number: Int
+    rank: Int
+    release_date: String
+    explicit_lyrics: Boolean
+    explicit_content_lyrics: Int
+    explicit_content_cover: Int
+    preview: String
+    bpm: Float
+    gain: Float
+    available_countries: [String]
+    md5_image: String
+    track_token: String
+    cover: String
+    cover_small: String
+    cover_medium: String
+    cover_big: String
+    cover_xl: String
+    position: Int
+    artist: Artist
+    album: Album
+    createdAt: String
+    updatedAt: String
   }
 
   type Playlist {
     id: ID!
-    name: String!
+    title: String!
     description: String
-    user: User!
+    duration: Int
+    public: Boolean
+    collaborative: Boolean
+    nb_tracks: Int
+    fans: Int
+    link: String
+    share: String
+    picture: String
+    picture_small: String
+    picture_medium: String
+    picture_big: String
+    picture_xl: String
     tracks: [Track!]
-    totalTracks: Int
-    isPublic: Boolean
-    coverUrl: String
-    createdAt: String!
-    updatedAt: String!
+    user: User
+    createdAt: String
+    updatedAt: String
   }
 
   type User {
@@ -78,23 +117,63 @@ const typeDefs = gql`
     username: String!
     email: String!
     role: String!
-    favoriteGenres: [String!]
-    playlists: [Playlist!]
-    createdAt: String!
+    createdAt: String
   }
 
-  type Review {
+  type Genre {
     id: ID!
-    user: User!
-    album: Album!
-    rating: Int!
-    comment: String
-    createdAt: String!
+    name: String!
+    picture: String
+    picture_small: String
+    picture_medium: String
+    picture_big: String
+    picture_xl: String
   }
+
+  type ArtistTracksResult {
+    nodes: [Track!]!
+    totalCount: Int!
+    pageInfo: PageInfo!
+  }
+
+  type Radio {
+    id: ID!
+    title: String!
+    description: String
+    picture: String
+    picture_small: String
+    picture_medium: String
+    picture_big: String
+    picture_xl: String
+    tracklist: String
+  }
+
+  type Podcast {
+    id: ID!
+    title: String!
+    description: String
+    available: Boolean
+    fans: Int
+    link: String
+    share: String
+    picture: String
+    picture_small: String
+    picture_medium: String
+    picture_big: String
+    picture_xl: String
+  }
+
 
   type AuthPayload {
     token: String!
     user: User!
+  }
+
+  type LikedTrack {
+    id: ID!
+    user: User!
+    track: Track!
+    createdAt: String
   }
 
   # ================================
@@ -119,13 +198,6 @@ const typeDefs = gql`
     pageInfo: PageInfo!
   }
 
-  type ReviewConnection {
-    nodes: [Review!]!
-    totalCount: Int!
-    hasMore: Boolean!
-    total: Int!
-  }
-
   type PageInfo {
     hasNextPage: Boolean!
     hasPreviousPage: Boolean!
@@ -134,23 +206,22 @@ const typeDefs = gql`
   }
 
   input ArtistFilter {
-    country: String
-    genre: String
     searchName: String
   }
 
   input AlbumFilter {
-    genre: String
+    genre_id: Int
     artistId: ID
     yearFrom: Int
     yearTo: Int
+    explicit_lyrics: Boolean
   }
 
   input TrackFilter {
     albumId: ID
     artistId: ID
-    isExplicit: Boolean
-    minPlays: Int
+    explicit_lyrics: Boolean
+    minRank: Int
   }
 
   enum SortOrder {
@@ -160,20 +231,22 @@ const typeDefs = gql`
 
   enum ArtistSortField {
     NAME
-    CREATED_AT
+    NB_FAN
+    NB_ALBUM
   }
 
   enum AlbumSortField {
     TITLE
     RELEASE_DATE
-    AVERAGE_RATING
+    FANS
+    DURATION
   }
 
   enum TrackSortField {
     TITLE
-    PLAYS
+    RANK
     DURATION
-    TRACK_NUMBER
+    POSITION
   }
 
   input ArtistSort {
@@ -225,19 +298,33 @@ const typeDefs = gql`
     ): TrackConnection!
 
     track(id: ID!): Track
+    artistTracks(artistId: ID!, page: Int, limit: Int): ArtistTracksResult!  # ← ajouter ici
 
     # --- Top ---
     topTracks(limit: Int): [Track!]!
     topArtists(limit: Int): [Artist!]!
 
     # --- Playlists ---
-    playlists(userId: ID, isPublic: Boolean): [Playlist!]!
+    playlists(isPublic: Boolean): [Playlist!]!
     playlist(id: ID!): Playlist
 
-    # --- Reviews ---
-    reviews(page: Int, limit: Int): ReviewConnection!
-    albumReviews(albumId: ID!): [Review!]!
-    userReviews(userId: ID!): [Review!]!
+    # --- Genres ---
+    genres: [Genre!]!
+    genre(id: ID!): Genre
+
+    # --- Radios ---
+    radios: [Radio!]!
+    radio(id: ID!): Radio
+
+    # --- Podcasts ---
+    podcasts: [Podcast!]!
+    podcast(id: ID!): Podcast
+
+    # --- Liked tracks ---
+    likedTracks: [LikedTrack!]!          # pistes likées de l'utilisateur connecté
+    isTrackLiked(trackId: ID!): Boolean!
+
+
 
     # --- Utilisateurs ---
     me: User
@@ -278,19 +365,15 @@ const typeDefs = gql`
     deleteTrack(id: ID!): DeleteResult!
 
     # --- Playlists (user) ---
-    createPlaylist(input: CreatePlaylistInput!): Playlist!
+    createPlaylist(input: CreatePlaylistInput!, userId: ID!): Playlist!
     updatePlaylist(id: ID!, input: UpdatePlaylistInput!): Playlist!
     addTrackToPlaylist(playlistId: ID!, trackId: ID!): Playlist!
     removeTrackFromPlaylist(playlistId: ID!, trackId: ID!): Playlist!
     deletePlaylist(id: ID!): DeleteResult!
 
-    # --- Reviews (user) ---
-    createReview(input: CreateReviewInput!): Review!
-    updateReview(id: ID!, input: UpdateReviewInput!): Review!
-    deleteReview(id: ID!): DeleteResult!
-
-    # --- Plays ---
-    incrementPlays(trackId: ID!): Track!
+    # --- Liked Tracks (user) ---
+    likeTrack(trackId: ID!): LikedTrack!
+    unlikeTrack(trackId: ID!): DeleteResult!
   }
 
   type DeleteResult {
@@ -306,7 +389,6 @@ const typeDefs = gql`
     username: String!
     email: String!
     password: String!
-    favoriteGenres: [String!]
   }
 
   input LoginInput {
@@ -316,116 +398,152 @@ const typeDefs = gql`
 
   input CreateArtistInput {
     name: String!
-    bio: String
-    country: String
-    birthDate: String
-    genres: [String!]
-    imageUrl: String
-    socialLinks: SocialLinksInput
+    link: String
+    share: String
+    picture: String
+    picture_small: String
+    picture_medium: String
+    picture_big: String
+    picture_xl: String
+    nb_album: Int
+    nb_fan: Int
+    radio: Boolean
+    tracklist: String
   }
 
   input UpdateArtistInput {
     name: String
-    bio: String
-    country: String
-    birthDate: String
-    genres: [String!]
-    imageUrl: String
-    socialLinks: SocialLinksInput
-  }
-
-  input SocialLinksInput {
-    spotify: String
-    instagram: String
-    youtube: String
+    link: String
+    share: String
+    picture: String
+    picture_small: String
+    picture_medium: String
+    picture_big: String
+    picture_xl: String
+    nb_album: Int
+    nb_fan: Int
+    radio: Boolean
+    tracklist: String
   }
 
   input CreateAlbumInput {
     title: String!
     artistId: ID!
-    releaseDate: String
-    genre: String
+    upc: String
+    link: String
+    share: String
+    cover: String
+    cover_small: String
+    cover_medium: String
+    cover_big: String
+    cover_xl: String
+    genre_id: Int
     label: String
-    coverUrl: String
-    description: String
+    provider: String
+    nb_tracks: Int
+    duration: Int
+    release_date: String
+    record_type: String
+    available: Boolean
+    explicit_lyrics: Boolean
   }
 
   input UpdateAlbumInput {
     title: String
-    releaseDate: String
-    genre: String
+    upc: String
+    link: String
+    share: String
+    cover: String
+    cover_small: String
+    cover_medium: String
+    cover_big: String
+    cover_xl: String
+    genre_id: Int
     label: String
-    coverUrl: String
-    description: String
+    provider: String
+    nb_tracks: Int
+    duration: Int
+    release_date: String
+    record_type: String
+    available: Boolean
+    explicit_lyrics: Boolean
   }
 
   input CreateTrackInput {
     title: String!
     albumId: ID!
     artistId: ID!
+    readable: Boolean
+    title_short: String
+    title_version: String
+    link: String
     duration: Int
-    trackNumber: Int
-    lyrics: String
-    audioUrl: String
-    isExplicit: Boolean
+    rank: Int
+    explicit_lyrics: Boolean
+    preview: String
+    position: Int
   }
 
   input UpdateTrackInput {
     title: String
+    readable: Boolean
+    title_short: String
+    title_version: String
+    link: String
     duration: Int
-    trackNumber: Int
-    lyrics: String
-    audioUrl: String
-    isExplicit: Boolean
+    rank: Int
+    explicit_lyrics: Boolean
+    preview: String
+    position: Int
   }
 
   input CreatePlaylistInput {
-    name: String!
+    title: String!
     description: String
-    isPublic: Boolean
-    coverUrl: String
+    public: Boolean
+    collaborative: Boolean
+    picture: String
+    picture_small: String
+    picture_medium: String
+    picture_big: String
+    picture_xl: String
   }
 
   input UpdatePlaylistInput {
-    name: String
+    title: String
     description: String
-    isPublic: Boolean
-    coverUrl: String
-  }
-
-  input CreateReviewInput {
-    albumId: ID!
-    rating: Int!
-    comment: String
-  }
-
-  input UpdateReviewInput {
-    rating: Int
-    comment: String
+    public: Boolean
+    collaborative: Boolean
+    picture: String
+    picture_small: String
+    picture_medium: String
+    picture_big: String
+    picture_xl: String
   }
 
   # ================================
   # SUBSCRIPTIONS
   # ================================
-
+  type TrackDeletedPayload {
+    id: ID!
+  }
+  
+  type TrackLikedPayload {
+    trackId: ID!
+  }
+  
+  type TrackUnlikedPayload {
+    trackId: ID!
+  }
   type Subscription {
-    # Nouvelle piste ajoutée
-    trackAdded: Track!
-
-    # Album ajouté par un artiste spécifique
-    albumAdded(artistId: ID): Album!
-
-    # Artiste créé/mis à jour
-    artistUpdated: Artist!
-
-    # Changement dans une playlist (ajout / suppression de piste)
-    playlistUpdated(playlistId: ID!): Playlist!
-
-    # Nouveau avis posté sur un album
-    reviewAdded(albumId: ID!): Review!
-
-    # Nombre de plays en temps réel pour une piste
-    trackPlaysUpdated(trackId: ID!): Track!
+    trackAdded: Track
+    trackDeleted: TrackDeletedPayload
+    trackLiked: TrackLikedPayload
+    trackUnliked: TrackUnlikedPayload
+    albumAdded(artistId: ID): Album
+    artistUpdated: Artist
+    playlistUpdated(playlistId: ID!): Playlist
+    trackRankUpdated(trackId: ID!): Track
   }
 `;
 
