@@ -16,46 +16,86 @@ async function gql(query, variables = {}, token = null) {
   return res.json();
 }
 
+/** Convertit une durée en secondes → "m:ss" */
+function formatDuration(seconds) {
+  if (!seconds && seconds !== 0) return "—";
+  const m = Math.floor(seconds / 60);
+  const s = String(seconds % 60).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
 const QUERIES = {
   ARTISTS: `query Artists($filter: ArtistFilter, $sort: ArtistSort, $page: Int, $limit: Int) {
     artists(filter: $filter, sort: $sort, page: $page, limit: $limit) {
-      nodes { id name country genres totalAlbums imageUrl }
+      nodes { id name nb_fan nb_album picture_medium }
       totalCount
       pageInfo { currentPage totalPages hasNextPage hasPreviousPage }
     }
   }`,
+
   ARTIST_DETAIL: `query Artist($id: ID!) {
     artist(id: $id) {
-      id name bio country genres imageUrl birthDate
-      socialLinks { spotify instagram youtube }
+      id name nb_fan nb_album picture_medium tracklist link
       albums {
-        id title genre releaseDate coverUrl totalTracks averageRating
-        tracks { id title durationFormatted plays isExplicit trackNumber }
+        id title genre_id release_date nb_tracks cover_medium
+        tracks { id title duration rank explicit_lyrics position }
       }
     }
   }`,
+
   TOP_TRACKS: `query TopTracks($limit: Int) {
     topTracks(limit: $limit) {
-      id title plays durationFormatted isExplicit
+      id title duration rank explicit_lyrics
       artist { name }
-      album { title coverUrl }
+      album { title cover_medium }
     }
   }`,
+
   SEARCH: `query Search($q: String!) {
     search(query: $q, limit: 6) {
-      artists { id name country }
-      albums  { id title genre }
-      tracks  { id title durationFormatted artist { name } }
+      artists { id name nb_fan }
+      albums  { id title genre_id }
+      tracks  { id title duration artist { name } }
     }
   }`,
+
   LOGIN: `mutation Login($email: String!, $password: String!) {
     login(input: { email: $email, password: $password }) {
       token
       user { id username email role }
     }
   }`,
-  ME: `query Me { me { id username email role favoriteGenres } }`,
-};
+
+  ME: `query Me { me { id username email role } }`,
+
+  LIKED_TRACKS: `query {
+    likedTracks {
+      id
+      createdAt
+      track {
+        id
+        title
+        duration
+        rank
+        explicit_lyrics
+        artist { name }
+        album { title cover_medium }
+      }
+    }
+  }`,
+  
+  LIKE_TRACK: `mutation LikeTrack($trackId: ID!) {
+    likeTrack(trackId: $trackId) {
+      id
+    }
+  }`,
+  
+  UNLIKE_TRACK: `mutation UnlikeTrack($trackId: ID!) {
+    unlikeTrack(trackId: $trackId) {
+      acknowledged
+    }
+  }`,
+}; 
 
 // ============================================================
 // COMPOSANTS UI
@@ -94,23 +134,15 @@ function Spinner() {
   );
 }
 
-function PlayCount({ plays }) {
-  const fmt = plays >= 1_000_000
-    ? `${(plays / 1_000_000).toFixed(1)}M`
-    : plays >= 1_000
-    ? `${Math.round(plays / 1_000)}K`
-    : plays;
-  return <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>▶ {fmt}</span>;
-}
-
-function StarRating({ rating }) {
-  if (!rating) return <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>—</span>;
-  return (
-    <span style={{ color: "#EF9F27", fontSize: 13 }}>
-      {"★".repeat(Math.round(rating))}{"☆".repeat(5 - Math.round(rating))}
-      <span style={{ color: "var(--color-text-secondary)", fontSize: 11, marginLeft: 4 }}>{rating.toFixed(1)}</span>
-    </span>
-  );
+/** Affiche le rank de la piste comme indicateur de popularité */
+function RankBadge({ rank }) {
+  if (!rank && rank !== 0) return <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>—</span>;
+  const fmt = rank >= 1_000_000
+    ? `${(rank / 1_000_000).toFixed(1)}M`
+    : rank >= 1_000
+    ? `${Math.round(rank / 1_000)}K`
+    : rank;
+  return <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>★ {fmt}</span>;
 }
 
 // ============================================================
@@ -134,9 +166,10 @@ function TopTracksView({ token }) {
         <label style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>Afficher</label>
         <select value={limit} onChange={e => setLimit(+e.target.value)}
           style={{ fontSize: 13, padding: "4px 8px", borderRadius: 6, border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-secondary)", color: "var(--color-text-primary)" }}>
-          {[5,10,20].map(n => <option key={n} value={n}>{n} pistes</option>)}
+          {[5, 10, 20].map(n => <option key={n} value={n}>{n} pistes</option>)}
         </select>
       </div>
+
       {loading ? <Spinner /> : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {tracks.map((t, i) => (
@@ -148,22 +181,22 @@ function TopTracksView({ token }) {
               border: "0.5px solid var(--color-border-tertiary)",
             }}>
               <span style={{ fontWeight: 500, fontSize: 13, color: "var(--color-text-secondary)", minWidth: 20, textAlign: "right" }}>{i + 1}</span>
-              {t.album?.coverUrl ? (
+              {t.album?.cover_medium ? (
                 <div style={{ width: 36, height: 36, borderRadius: 4, background: "var(--color-border-tertiary)", overflow: "hidden", flexShrink: 0 }}>
-                  <img src={t.album.coverUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => e.target.style.display='none'} />
+                  <img src={t.album.cover_medium} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => e.target.style.display = "none"} />
                 </div>
               ) : (
                 <div style={{ width: 36, height: 36, borderRadius: 4, background: "var(--color-border-tertiary)", flexShrink: 0 }} />
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {t.isExplicit && <Badge color="red">E</Badge>} {t.title}
+                  {t.explicit_lyrics && <Badge color="red">E</Badge>} {t.title}
                 </div>
                 <div style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{t.artist?.name} · {t.album?.title}</div>
               </div>
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                <PlayCount plays={t.plays} />
-                <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{t.durationFormatted}</span>
+                <RankBadge rank={t.rank} />
+                <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{formatDuration(t.duration)}</span>
               </div>
             </div>
           ))}
@@ -223,7 +256,7 @@ function ArtistsView({ token, onSelectArtist }) {
       {loading ? <Spinner /> : (
         <>
           <p style={{ fontSize: 12, color: "var(--color-text-secondary)", marginBottom: 12 }}>{totalCount} artiste{totalCount > 1 ? "s" : ""}</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(0, 1fr))", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             {artists.map(a => (
               <div key={a.id}
                 onClick={() => onSelectArtist(a.id)}
@@ -233,16 +266,23 @@ function ArtistsView({ token, onSelectArtist }) {
                   border: "0.5px solid var(--color-border-tertiary)",
                   borderRadius: "var(--border-radius-lg)",
                   transition: "border-color 0.15s",
+                  display: "flex", alignItems: "center", gap: 12,
                 }}
                 onMouseEnter={e => e.currentTarget.style.borderColor = "var(--color-border-primary)"}
                 onMouseLeave={e => e.currentTarget.style.borderColor = "var(--color-border-tertiary)"}
               >
-                <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 4 }}>{a.name}</div>
-                <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginBottom: 8 }}>
-                  {a.country} · {a.totalAlbums} album{a.totalAlbums > 1 ? "s" : ""}
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {a.genres?.slice(0, 3).map(g => <Badge key={g} color="purple">{g}</Badge>)}
+                {a.picture_medium ? (
+                  <div style={{ width: 44, height: 44, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: "var(--color-border-tertiary)" }}>
+                    <img src={a.picture_medium} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => e.target.style.display = "none"} />
+                  </div>
+                ) : (
+                  <div style={{ width: 44, height: 44, borderRadius: "50%", background: "var(--color-border-tertiary)", flexShrink: 0 }} />
+                )}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+                  <div style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+                    {a.nb_album ?? 0} album{a.nb_album > 1 ? "s" : ""} · {a.nb_fan?.toLocaleString("fr-FR") ?? 0} fans
+                  </div>
                 </div>
               </div>
             ))}
@@ -295,15 +335,20 @@ function ArtistDetail({ artistId, token, onBack }) {
         ← Retour
       </button>
 
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 500, margin: "0 0 4px" }}>{artist.name}</h2>
-        <div style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 8 }}>
-          {artist.country} {artist.birthDate && `· né(e) en ${new Date(artist.birthDate).getFullYear()}`}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
+        {artist.picture_medium ? (
+          <div style={{ width: 72, height: 72, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: "var(--color-border-tertiary)" }}>
+            <img src={artist.picture_medium} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => e.target.style.display = "none"} />
+          </div>
+        ) : (
+          <div style={{ width: 72, height: 72, borderRadius: "50%", background: "var(--color-border-tertiary)", flexShrink: 0 }} />
+        )}
+        <div>
+          <h2 style={{ fontSize: 22, fontWeight: 500, margin: "0 0 4px" }}>{artist.name}</h2>
+          <div style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+            {artist.nb_album ?? 0} album{artist.nb_album > 1 ? "s" : ""} · {artist.nb_fan?.toLocaleString("fr-FR") ?? 0} fans
+          </div>
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 12 }}>
-          {artist.genres?.map(g => <Badge key={g} color="purple">{g}</Badge>)}
-        </div>
-        {artist.bio && <p style={{ fontSize: 14, color: "var(--color-text-secondary)", lineHeight: 1.6, margin: 0 }}>{artist.bio}</p>}
       </div>
 
       <h3 style={{ fontSize: 16, fontWeight: 500, margin: "0 0 12px" }}>Albums ({artist.albums?.length || 0})</h3>
@@ -316,18 +361,15 @@ function ArtistDetail({ artistId, token, onBack }) {
               style={{ display: "flex", alignItems: "center", gap: 12, padding: 14, cursor: "pointer", background: "var(--color-background-secondary)" }}
             >
               <div style={{ width: 48, height: 48, borderRadius: 6, background: "var(--color-border-tertiary)", flexShrink: 0, overflow: "hidden" }}>
-                {album.coverUrl && <img src={album.coverUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => e.target.style.display="none"} />}
+                {album.cover_medium && <img src={album.cover_medium} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => e.target.style.display = "none"} />}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 500, fontSize: 15 }}>{album.title}</div>
                 <div style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
-                  {album.genre} · {album.releaseDate ? new Date(album.releaseDate).getFullYear() : "?"} · {album.totalTracks} pistes
+                  {album.genre_id ? `Genre #${album.genre_id}` : "—"} · {album.release_date ? new Date(album.release_date).getFullYear() : "?"} · {album.nb_tracks ?? 0} piste{album.nb_tracks > 1 ? "s" : ""}
                 </div>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                <StarRating rating={album.averageRating} />
-                <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{expanded === album.id ? "▲" : "▼"}</span>
-              </div>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{expanded === album.id ? "▲" : "▼"}</span>
             </div>
 
             {expanded === album.id && (
@@ -337,12 +379,12 @@ function ArtistDetail({ artistId, token, onBack }) {
                     display: "flex", alignItems: "center", gap: 10, padding: "8px 14px",
                     borderTop: "0.5px solid var(--color-border-tertiary)",
                   }}>
-                    <span style={{ fontSize: 12, color: "var(--color-text-secondary)", minWidth: 18, textAlign: "right" }}>{t.trackNumber}</span>
+                    <span style={{ fontSize: 12, color: "var(--color-text-secondary)", minWidth: 18, textAlign: "right" }}>{t.position ?? "—"}</span>
                     <span style={{ flex: 1, fontSize: 14 }}>
-                      {t.isExplicit && <Badge color="red">E</Badge>} {t.title}
+                      {t.explicit_lyrics && <Badge color="red">E</Badge>} {t.title}
                     </span>
-                    <PlayCount plays={t.plays} />
-                    <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{t.durationFormatted}</span>
+                    <RankBadge rank={t.rank} />
+                    <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{formatDuration(t.duration)}</span>
                   </div>
                 ))}
               </div>

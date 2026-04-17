@@ -97,6 +97,7 @@ const DELETE_REVIEW_MUTATION = gql`
 `;
 
 export default function Reviews({ token, userId }) {
+  const [user, setUser] = useState(JSON.parse(localStorage.getItem('user') || 'null'));
   const [page, setPage] = useState(1);
   const [reviewFilter, setReviewFilter] = useState('all');
   const [selectedAlbumId, setSelectedAlbumId] = useState('');

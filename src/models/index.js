@@ -1,101 +1,264 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-// ===========================
-// MODÈLE : Artiste
-// ===========================
+// ============================
+// 🎤 ARTIST
+// ============================
 const artistSchema = new mongoose.Schema({
-  name: { type: String, required: true, trim: true },
-  bio: { type: String },
-  country: { type: String },
-  birthDate: { type: Date },
-  genres: [{ type: String }],
-  imageUrl: { type: String },
-  socialLinks: {
-    spotify: String,
-    instagram: String,
-    youtube: String,
-  },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
+  id: Number,
+  name: String,
+  link: String,
+  share: String,
+
+  picture: String,
+  picture_small: String,
+  picture_medium: String,
+  picture_big: String,
+  picture_xl: String,
+
+  nb_album: Number,
+  nb_fan: Number,
+  radio: Boolean,
+
+  tracklist: String,
 });
 
-// ===========================
-// MODÈLE : Album
-// ===========================
+// ============================
+// 💿 ALBUM
+// ============================
 const albumSchema = new mongoose.Schema({
-  title: { type: String, required: true, trim: true },
-  artistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Artist', required: true },
-  releaseDate: { type: Date },
-  genre: { type: String },
-  label: { type: String },
-  coverUrl: { type: String },
-  description: { type: String },
-  totalTracks: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
+  id: Number,
+  title: String,
+  upc: String,
+  link: String,
+  share: String,
+
+  cover: String,
+  cover_small: String,
+  cover_medium: String,
+  cover_big: String,
+  cover_xl: String,
+
+  genre_id: Number,
+
+  label: String,
+  provider: String,
+
+  nb_tracks: Number,
+  duration: Number,
+  fans: Number,
+
+  release_date: Date,
+  record_type: String,
+  available: Boolean,
+
+  tracklist: String,
+
+  explicit_lyrics: Boolean,
+  explicit_content_lyrics: Number,
+  explicit_content_cover: Number,
+
+  artist: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Artist",
+  },
 });
 
-// ===========================
-// MODÈLE : Chanson (Track)
-// ===========================
+// ============================
+// 🎵 TRACK
+// ============================
 const trackSchema = new mongoose.Schema({
-  title: { type: String, required: true, trim: true },
-  albumId: { type: mongoose.Schema.Types.ObjectId, ref: 'Album', required: true },
-  artistId: { type: mongoose.Schema.Types.ObjectId, ref: 'Artist', required: true },
-  duration: { type: Number }, // en secondes
-  trackNumber: { type: Number },
-  lyrics: { type: String },
-  audioUrl: { type: String },
-  plays: { type: Number, default: 0 },
-  isExplicit: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
+  id: Number,
+  readable: Boolean,
+
+  title: String,
+  title_short: String,
+  title_version: String,
+
+  isrc: String,
+  link: String,
+  share: String,
+
+  duration: Number,
+  track_position: Number,
+  disk_number: Number,
+  rank: Number,
+  release_date: Date,
+
+  explicit_lyrics: Boolean,
+  explicit_content_lyrics: Number,
+  explicit_content_cover: Number,
+
+  preview: String,
+  bpm: Number,
+  gain: Number,
+  available_countries: [String],
+  md5_image: String,
+  track_token: String,
+
+  // Album cover image fields (from album sub-object)
+  cover: String,
+  cover_small: String,
+  cover_medium: String,
+  cover_big: String,
+  cover_xl: String,
+
+  position: Number,
+
+  artist: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Artist",
+  },
+  album: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Album",
+  },
 });
 
-// ===========================
-// MODÈLE : Playlist
-// ===========================
+// ============================
+// 🎼 GENRE
+// ============================
+const genreSchema = new mongoose.Schema({
+  id: Number,
+  name: String,
+
+  picture: String,
+  picture_small: String,
+  picture_medium: String,
+  picture_big: String,
+  picture_xl: String,
+});
+
+// ============================
+// 📻 RADIO
+// ============================
+const radioSchema = new mongoose.Schema({
+  id: Number,
+  title: String,
+  description: String,
+
+  picture: String,
+  picture_small: String,
+  picture_medium: String,
+  picture_big: String,
+  picture_xl: String,
+
+  tracklist: String,
+});
+
+// ============================
+// 🎧 PLAYLIST
+// ============================
 const playlistSchema = new mongoose.Schema({
-  name: { type: String, required: true, trim: true },
-  description: { type: String },
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  tracks: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Track' }],
-  isPublic: { type: Boolean, default: true },
-  coverUrl: { type: String },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
+  id: Number,
+  title: String,
+  description: String,
+  duration: Number,
+
+  public: Boolean,
+  collaborative: Boolean,
+
+  nb_tracks: Number,
+  fans: Number,
+
+  link: String,
+  share: String,
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+  },
+  picture: String,
+  picture_small: String,
+  picture_medium: String,
+  picture_big: String,
+  picture_xl: String,
+
+  tracks: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Track",
+    },
+  ],
 });
 
-// ===========================
-// MODÈLE : Utilisateur
-// ===========================
+// ============================
+// 🎙️ PODCAST
+// ============================
+const podcastSchema = new mongoose.Schema({
+  id: Number,
+  title: String,
+  description: String,
+  available: Boolean,
+
+  fans: Number,
+
+  link: String,
+  share: String,
+
+  picture: String,
+  picture_small: String,
+  picture_medium: String,
+  picture_big: String,
+  picture_xl: String,
+});
+
+// ============================
+// 📰 EDITORIAL
+// ============================
+const editorialSchema = new mongoose.Schema({
+  id: Number,
+  name: String,
+
+  picture: String,
+  picture_small: String,
+  picture_medium: String,
+  picture_big: String,
+  picture_xl: String,
+});
+
+// ============================
+// 👤 USER
+// ============================
 const userSchema = new mongoose.Schema({
-  username: { type: String, required: true, unique: true, trim: true },
-  email: { type: String, required: true, unique: true, lowercase: true },
-  password: { type: String, required: true },
-  role: { type: String, enum: ['user', 'admin'], default: 'user' },
-  favoriteGenres: [{ type: String }],
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
+  username: String,
+  email: String,
+  password: String,
+  role: String,
 });
 
-// ===========================
-// MODÈLE : Avis (Review)
-// ===========================
-const reviewSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  albumId: { type: mongoose.Schema.Types.ObjectId, ref: 'Album', required: true },
-  rating: { type: Number, required: true, min: 1, max: 5 },
-  comment: { type: String },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
-});
+// ============================
+// ❤️ LIKED TRACKS
+// ============================
+const likedTracksSchema = new mongoose.Schema(
+  {
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    track: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Track",
+      required: true,
+    },
+  },
+  { timestamps: true }
+);
 
-const Artist   = mongoose.model('Artist',   artistSchema);
-const Album    = mongoose.model('Album',    albumSchema);
-const Track    = mongoose.model('Track',    trackSchema);
-const Playlist = mongoose.model('Playlist', playlistSchema);
-const User     = mongoose.model('User',     userSchema);
-const Review   = mongoose.model('Review',   reviewSchema);
+// Empêcher les doublons : un user ne peut liker le même track qu'une seule fois
+likedTracksSchema.index({ user: 1, track: 1 }, { unique: true });
 
-module.exports = { Artist, Album, Track, Playlist, User, Review };
+// ============================
+// EXPORTS
+// ============================
+module.exports = {
+  Artist: mongoose.model("Artist", artistSchema),
+  Album: mongoose.model("Album", albumSchema),
+  Track: mongoose.model("Track", trackSchema),
+  Genre: mongoose.model("Genre", genreSchema),
+  Radio: mongoose.model("Radio", radioSchema),
+  Playlist: mongoose.model("Playlist", playlistSchema),
+  Podcast: mongoose.model("Podcast", podcastSchema),
+  Editorial: mongoose.model("Editorial", editorialSchema),
+  User: mongoose.model("User", userSchema),
+  LikedTrack: mongoose.model("LikedTrack", likedTracksSchema)
+};
